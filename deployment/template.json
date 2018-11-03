@@ -1,0 +1,1054 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "userPubKeyValue": {
+            "type": "string"
+        },
+        "rhelPrivKeyValue": {
+            "type": "securestring"
+        },
+        "rhelPubKeyValue": {
+            "type": "string"
+        },
+        "rootPrivKeyValue": {
+            "type": "securestring"
+        },
+        "rootPubKeyValue": {
+            "type": "string"
+        },
+        "adwinPassword": {
+            "type": "securestring"
+        },
+        "db2bits": {
+            "type": "string"
+        },
+        "gitrawurl": {
+            "type": "string"
+        },
+        "vnetName": {
+            "defaultValue": "db2vnet",
+            "type": "string"
+        },
+        "nbDb2MemberVms": {
+            "defaultValue": 2,
+            "type": "int"
+        },
+        "nbDb2CfVms": {
+            "defaultValue": 2,
+            "type": "int"
+        },
+        "nbGlusterFsVms": {
+            "defaultValue": 3,
+            "type": "int"
+        },
+        "jumpboxPublicName": {
+            "defaultValue": "[concat('jbox',uniqueString(resourceGroup().id, 'jumpbox'))]",
+            "type": "string"
+        },
+        "acceleratedNetworkingOnGlusterfs": {
+            "defaultValue": false,
+            "type": "bool"
+        },
+        "acceleratedNetworkingOnDB2": {
+            "defaultValue": false,
+            "type": "bool"
+        },
+        "acceleratedNetworkingOnOthers": {
+            "defaultValue": false,
+            "type": "bool"
+        },
+        "lisbits": {
+            "type": "string"
+        }
+    },
+    "variables": {
+        "location": "[resourceGroup().location]",
+        "linkedTemplatesUrl": "[concat(parameters('gitrawurl'),'deployment/linkedtemplates/')]",
+        "initScriptsUrl": "[concat(parameters('gitrawurl'),'deployment/initscripts/')]",
+        "diagsStorageAccountName": "[concat('storage', uniqueString(resourceGroup().id,'0'))]",
+        "db2MemberSubnets": ["main", "gfsfe", "db2be", "db2fe"],
+        "db2MemberIpAdddressPrefixes": ["192.168.0.2", "192.168.1.2", "192.168.3.2", "192.168.4.2"],
+        "db2CfSubnets": ["main", "gfsfe", "db2be"],
+        "db2CfIpAdddressPrefixes": ["192.168.0.3", "192.168.1.3", "192.168.3.3"],
+        "glusterFsSubnets": ["main", "gfsfe", "gfsbe"],
+        "glusterFsIpAdddressPrefixes": ["192.168.0.1", "192.168.1.1", "192.168.2.1"],
+        "witnessSubnets": ["main", "gfsfe", "db2be", "db2fe"],
+        "witnessIpAdddressPrefixes": ["192.168.0.6", "192.168.1.6", "192.168.3.6", "192.168.4.6"],
+        "windowsClientSubnets": ["main", "db2fe"],
+        "windowsClientIpAdddressPrefixes": ["192.168.0.4", "192.168.4.4"],
+        "commandLogs": " \"/tmp/custom-scripts-from-ARM.log\"",
+        "comnmandUserAndKeysArgsWithRoot": "[concat('\"', parameters('userPubKeyValue'), '\" \"', parameters('rhelPrivKeyValue'), '\" \"', parameters('rhelPubKeyValue'), '\" \"', parameters('rootPrivKeyValue'), '\" \"', parameters('rootPubKeyValue'), '\"')]",
+        "comnmandUserAndKeysArgsNoRoot":   "[concat('\"', parameters('userPubKeyValue'), '\" \"', parameters('rhelPrivKeyValue'), '\" \"', parameters('rhelPubKeyValue'), '\" \"x\" \"x\"')]",
+        "commandOnDb2": "[concat('bash -v db2.sh ', variables('comnmandUserAndKeysArgsWithRoot'), ' \"', parameters('db2bits'), '\"', ' \"', parameters('nbDb2MemberVms'), '\"', ' \"', parameters('nbDb2CfVms'), '\"', variables('commandLogs'), ' \"', parameters('acceleratedNetworkingOnDB2'), '\" \"', parameters('lisbits'), '\"')]",
+        "commandOnGlusterfs": "[concat('bash -v glusterfs.sh ', variables('comnmandUserAndKeysArgsWithRoot'), variables('commandLogs'))]",
+        "commandOnWitness": "[concat('bash -v witness.sh ', variables('comnmandUserAndKeysArgsWithRoot'), variables('commandLogs'))]",
+        "commandOnJumpbox": "[concat('bash -v jumpbox.sh ', variables('comnmandUserAndKeysArgsNoRoot'), variables('commandLogs'))]"
+    },
+    "outputs": {
+        "nbDb2MemberVms": {
+            "type": "int",
+            "value": "[parameters('nbDb2MemberVms')]"
+        },
+        "nbDb2CfVms": {
+            "type": "int",
+            "value": "[parameters('nbDb2CfVms')]"
+        }
+    },
+    "resources": [
+        {
+            "comments": "diagnostics storage'.",
+            "type": "Microsoft.Storage/storageAccounts",
+            "sku": {
+                "name": "Standard_LRS",
+                "tier": "Standard"
+            },        
+            "kind": "StorageV2",
+            "name": "[variables('diagsStorageAccountName')]",
+                "apiVersion": "2017-10-01",
+                "location": "westeurope",
+                "tags": {},
+                "scale": null,
+                "properties": {
+                    "networkAcls": {
+                        "bypass": "AzureServices",
+                        "virtualNetworkRules": [],
+                        "ipRules": [],
+                        "defaultAction": "Allow"
+                    },
+                    "supportsHttpsTrafficOnly": false,
+                    "encryption": {
+                        "services": {
+                            "file": {
+                                "enabled": true
+                            },
+                            "blob": {
+                                "enabled": true
+                            }
+                        },
+                        "keySource": "Microsoft.Storage"
+                    },
+                    "accessTier": "Hot"
+                },
+                "dependsOn": []
+            },
+            {
+            "comments": "vNET and NSG",
+            "type": "Microsoft.Resources/deployments",
+            "name": "vNetAndNsg",
+            "apiVersion": "2015-01-01",
+            "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                    "uri": "[concat(variables('linkedTemplatesUrl'), 'vnet_template.json')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    }
+                }
+            },
+            "dependsOn": []            
+        },
+        {
+            "comments": "jumpbox public IP address",
+            "type": "Microsoft.Network/publicIPAddresses",
+            "sku": {
+                "name": "Basic",
+                "tier": "Regional"
+            },
+            "name": "jumbox_public_ip",
+            "apiVersion": "2018-02-01",
+            "location": "[variables('location')]",
+            "scale": null,
+            "properties": {
+                "publicIPAddressVersion": "IPv4",
+                "publicIPAllocationMethod": "Dynamic",
+                "idleTimeoutInMinutes": 4,
+                "dnsSettings": {
+                    "domainNameLabel": "[parameters('jumpboxPublicName')]"
+                },
+                "ipTags": []
+            },
+            "dependsOn": []
+        },
+        {
+            "comments": "jumpbox NIC",
+            "type": "Microsoft.Network/networkInterfaces",
+            "name": "jumpbox0_main",
+            "apiVersion": "2018-02-01",
+            "location": "[variables('location')]",
+            "scale": null,
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "privateIPAddress": "192.168.0.5",
+                            "privateIPAllocationMethod": "Static",
+                            "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', 'jumbox_public_ip')]"
+                            },
+                            "subnet": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'main')]"
+                            },
+                            "primary": true,
+                            "privateIPAddressVersion": "IPv4"
+                        }
+                    }
+                ],
+                "dnsSettings": {
+                    "dnsServers": [],
+                    "appliedDnsServers": []
+                },
+                "enableAcceleratedNetworking": "[parameters('acceleratedNetworkingOnOthers')]",
+                "enableIPForwarding": false,
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat(parameters('vnetName'), '_nsg'))]"
+                }
+            },
+            "dependsOn": [
+                "jumbox_public_ip",
+                "vNetAndNsg"
+            ]
+        },
+        {
+            "comments": "jumpbox VM",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "jumpbox",
+            "apiVersion": "2017-12-01",
+            "location": "[variables('location')]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_DS2_v2"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "RedHat",
+                        "offer": "RHEL",
+                        "sku": "7-RAW",
+                        "version": "7.5.2018042521"
+                    },
+                    "osDisk": {
+                        "osType": "Linux",
+                        "name": "[concat('jumpbox0_osDisk')]",
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite",
+                        "managedDisk": {
+                        }
+                    },
+                    "dataDisks": []
+                },
+                "osProfile": {
+                    "computerName": "jumpbox",
+                    "adminUsername": "rhel",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "/home/rhel/.ssh/authorized_keys",
+                                    "keyData": "[concat(parameters('userPubKeyValue'), '\n')]"
+                                }
+                            ]
+                        }
+                    },
+                    "secrets": []
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', 'jumpbox0_main')]",
+                            "properties": {
+                                "primary": true
+                            }
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true,
+                        "storageUri": "[concat('https://',variables('diagsStorageAccountName'),'.blob.core.windows.net')]"
+                    }
+                }
+            },
+            "resources": [
+                {
+                    "apiVersion": "2017-12-01",
+                    "type": "extensions",
+                    "name": "initJumpboxVm",
+                    "location": "[resourceGroup().location]",
+                    "dependsOn": [
+                        "[concat('Microsoft.Compute/virtualMachines/', 'jumpbox')]"
+                    ],
+                    "tags": {
+                        "displayName": "initJumpboxVm"
+                    },
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Extensions",
+                        "type": "CustomScript",
+                        "typeHandlerVersion": "2.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[concat(variables('initScriptsUrl'), 'jumpbox.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/startnetwork_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/setsshkeys_root.sh')]"
+                            ]
+                        },
+                        "protectedSettings": {
+                            "commandToExecute": "[variables('commandOnJumpbox')]"
+                        }
+                    }
+                }
+            ],
+            "dependsOn": [
+                "jumpbox0_main",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagsStorageAccountName'))]"
+            ]
+        },
+        {
+            "comments": "db2 member NICs",
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('db2MemberNic', copyIndex())]",
+            "apiVersion": "2015-01-01",
+            "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                    "uri": "[concat(variables('linkedTemplatesUrl'), 'nics_template.json')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('db2MemberSubnets')[copyIndex()]]"
+                    },
+                    "ipAdddressPrefix": {
+                        "value": "[variables('db2MemberIpAdddressPrefixes')[copyIndex()]]"
+                    },
+                    "vmPrefix": {
+                        "value": "d"
+                    },
+                    "nb_vms": {
+                        "value": "[parameters('nbDb2MemberVms')]"
+                    },
+                    "enableAcceleratedNetworking": {
+                        "value": false
+                    }
+                }
+            },
+            "copy": {
+                "name": "db2MemberNicsCopy",
+                "count": "[length(variables('db2MemberSubnets'))]"
+            },
+            "dependsOn": ["vNetAndNsg"]            
+        },
+        {
+            "comments": "db2 members VMs",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "[concat('d', copyIndex())]",
+            "apiVersion": "2017-12-01",
+            "location": "[variables('location')]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_DS3_v2"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "RedHat",
+                        "offer": "RHEL",
+                        "sku": "7.3",
+                        "version": "7.3.2017090723"
+                    },
+                    "osDisk": {
+                        "osType": "Linux",
+                        "name": "[concat('d', copyIndex(),'_osDisk')]",
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite",
+                        "managedDisk": {
+                        }
+                    }
+                },
+                "osProfile": {
+                    "computerName": "[concat('d', copyIndex())]",
+                    "adminUsername": "rhel",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "/home/rhel/.ssh/authorized_keys",
+                                    "keyData": "[concat(parameters('rhelPubKeyValue'), '\n')]"
+                                }
+                            ]
+                        }
+                    },
+                    "secrets": []
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('d', copyIndex(), '_main'))]",
+                            "properties": {
+                                "primary": true
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('d', copyIndex(), '_gfsfe'))]",
+                            "properties": {
+                                "primary": false
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('d', copyIndex(), '_db2be'))]",
+                            "properties": {
+                                "primary": false
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('d', copyIndex(), '_db2fe'))]",
+                            "properties": {
+                                "primary": false
+                            }
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true,
+                        "storageUri": "[concat('https://',variables('diagsStorageAccountName'),'.blob.core.windows.net')]"
+                    }
+                }
+            },
+            "resources": [
+                {
+                    "apiVersion": "2017-12-01",
+                    "type": "extensions",
+                    "name": "[concat('initDb2MemberVm', copyIndex())]",
+                    "location": "[resourceGroup().location]",
+                    "dependsOn": [
+                        "[concat('Microsoft.Compute/virtualMachines/', 'd', copyIndex())]"
+                    ],
+                    "tags": {
+                        "displayName": "initDb2MemberVm"
+                    },
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Extensions",
+                        "type": "CustomScript",
+                        "typeHandlerVersion": "2.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[concat(variables('initScriptsUrl'), 'db2.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/startnetwork_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/setsshkeys_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/db2_root.sh')]"
+                            ]
+                        },
+                        "protectedSettings": {
+                            "commandToExecute": "[variables('commandondb2')]"
+                        }
+                    }
+                }
+            ],
+            "copy": {
+                "name": "db2MemberVmsCopy",
+                "count": "[parameters('nbDb2MemberVms')]"
+            },
+            "dependsOn": [
+                "db2MemberNicsCopy", 
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagsStorageAccountName'))]"
+            ]
+        },
+        {
+            "comments": "db2 CF NICs",
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('db2CfNic', copyIndex())]",
+            "apiVersion": "2015-01-01",
+            "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                    "uri": "[concat(variables('linkedTemplatesUrl'), 'nics_template.json')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('db2CfSubnets')[copyIndex()]]"
+                    },
+                    "ipAdddressPrefix": {
+                        "value": "[variables('db2CfIpAdddressPrefixes')[copyIndex()]]"
+                    },
+                    "vmPrefix": {
+                        "value": "cf"
+                    },
+                    "nb_vms": {
+                        "value": "[parameters('nbDb2CfVms')]"
+                    },
+                    "enableAcceleratedNetworking": {
+                        "value": false
+                    }
+                }
+            },
+            "copy": {
+                "name": "db2CfNicsCopy",
+                "count": "[length(variables('db2CfSubnets'))]"
+            },
+            "dependsOn": ["vNetAndNsg"]            
+        },
+        {
+            "comments": "db2 CF VMs",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "[concat('cf', copyIndex())]",
+            "apiVersion": "2017-12-01",
+            "location": "[variables('location')]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_DS3_v2"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "RedHat",
+                        "offer": "RHEL",
+                        "sku": "7.3",
+                        "version": "7.3.2017090723"
+                    },
+                    "osDisk": {
+                        "osType": "Linux",
+                        "name": "[concat('cf', copyIndex(),'_osDisk')]",
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite",
+                        "managedDisk": {
+                        }
+                    }
+                },
+                "osProfile": {
+                    "computerName": "[concat('cf', copyIndex())]",
+                    "adminUsername": "rhel",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "/home/rhel/.ssh/authorized_keys",
+                                    "keyData": "[concat(parameters('rhelPubKeyValue'), '\n')]"
+                                }
+                            ]
+                        }
+                    },
+                    "secrets": []
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('cf', copyIndex(), '_main'))]",
+                            "properties": {
+                                "primary": true
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('cf', copyIndex(), '_gfsfe'))]",
+                            "properties": {
+                                "primary": false
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('cf', copyIndex(), '_db2be'))]",
+                            "properties": {
+                                "primary": false
+                            }
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true,
+                        "storageUri": "[concat('https://',variables('diagsStorageAccountName'),'.blob.core.windows.net')]"
+                    }
+                }
+            },
+            "resources": [
+                {
+                    "apiVersion": "2017-12-01",
+                    "type": "extensions",
+                    "name": "[concat('initDb2CfVm', copyIndex())]",
+                    "location": "[resourceGroup().location]",
+                    "dependsOn": [
+                        "[concat('Microsoft.Compute/virtualMachines/', 'cf', copyIndex())]"
+                    ],
+                    "tags": {
+                        "displayName": "initDb2CfVm"
+                    },
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Extensions",
+                        "type": "CustomScript",
+                        "typeHandlerVersion": "2.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[concat(variables('initScriptsUrl'), 'db2.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/startnetwork_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/setsshkeys_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/db2_root.sh')]"
+                            ]
+                        },
+                        "protectedSettings": {
+                            "commandToExecute": "[variables('commandOnDb2')]"
+                        }
+                    }
+                }
+            ],
+            "copy": {
+                "name": "db2CfVmsCopy",
+                "count": "[parameters('nbDb2CfVms')]"
+            },
+            "dependsOn": [
+                "db2CfNicsCopy",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagsStorageAccountName'))]"
+             ]
+        },
+        {
+            "comments": "Gluster FS member NICs",
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('glusterFsNic', copyIndex())]",
+            "apiVersion": "2015-01-01",
+            "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                    "uri": "[concat(variables('linkedTemplatesUrl'), 'nics_template.json')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('glusterFsSubnets')[copyIndex()]]"
+                    },
+                    "ipAdddressPrefix": {
+                        "value": "[variables('glusterFsIpAdddressPrefixes')[copyIndex()]]"
+                    },
+                    "vmPrefix": {
+                        "value": "g"
+                    },
+                    "nb_vms": {
+                        "value": "[parameters('nbGlusterFsVms')]"
+                    },
+                    "enableAcceleratedNetworking": {
+                        "value": "[parameters('acceleratedNetworkingOnGlusterfs')]"
+                    }
+                }
+            },
+            "copy": {
+                "name": "glusterFsNicsCopy",
+                "count": "[length(variables('glusterFsSubnets'))]"
+            },
+            "dependsOn": ["vNetAndNsg"]            
+        },
+        {
+            "comments": "Gluster FS VMs",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "[concat('g', copyIndex())]",
+            "apiVersion": "2017-12-01",
+            "location": "[variables('location')]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_DS4_v2"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "RedHat",
+                        "offer": "RHEL",
+                        "sku": "7-RAW",
+                        "version": "7.5.2018042521"
+                    },
+                    "osDisk": {
+                        "osType": "Linux",
+                        "name": "[concat('g', copyIndex(),'_osDisk')]",
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite",
+                        "managedDisk": {
+                        }
+                    },
+                    "dataDisks": [
+                        {
+                            "lun": 0,
+                            "name": "[concat('g', copyIndex(),'_dataDisk_lun0')]",
+                            "createOption": "Empty",
+                            "diskSizeGB": 1000,
+                            "caching": "None",
+                            "managedDisk": {
+                                "storageAccountType": "Premium_LRS"
+                            }
+                        },
+                        {
+                            "lun": 1,
+                            "name": "[concat('g', copyIndex(),'_dataDisk_lun1')]",
+                            "createOption": "Empty",
+                            "diskSizeGB": 1000,
+                            "caching": "None",
+                            "managedDisk": {
+                                "storageAccountType": "Premium_LRS"
+                            }
+                        }
+                    ]
+                },
+                "osProfile": {
+                    "computerName": "[concat('g', copyIndex())]",
+                    "adminUsername": "rhel",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "/home/rhel/.ssh/authorized_keys",
+                                    "keyData": "[concat(parameters('rhelPubKeyValue'), '\n')]"
+                                }
+                            ]
+                        }
+                    },
+                    "secrets": []
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('g', copyIndex(), '_main'))]",
+                            "properties": {
+                                "primary": true
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('g', copyIndex(), '_gfsfe'))]",
+                            "properties": {
+                                "primary": false
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat('g', copyIndex(), '_gfsbe'))]",
+                            "properties": {
+                                "primary": false
+                            }
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true,
+                        "storageUri": "[concat('https://',variables('diagsStorageAccountName'),'.blob.core.windows.net')]"
+                    }
+                }
+            },
+            "resources": [
+                {
+                    "apiVersion": "2017-12-01",
+                    "type": "extensions",
+                    "name": "[concat('initGlusterFsVm', copyIndex())]",
+                    "location": "[resourceGroup().location]",
+                    "dependsOn": [
+                        "[concat('Microsoft.Compute/virtualMachines/', 'g', copyIndex())]"
+                    ],
+                    "tags": {
+                        "displayName": "initGlusterFsVm"
+                    },
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Extensions",
+                        "type": "CustomScript",
+                        "typeHandlerVersion": "2.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[concat(variables('initScriptsUrl'), 'glusterfs.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/startnetwork_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/setsshkeys_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/installconfiggluster_root.sh')]"
+                            ]
+                        },
+                        "protectedSettings": {
+                            "commandToExecute": "[variables('commandOnGlusterfs')]"
+                        }
+                    }
+                }
+            ],
+            "copy": {
+                "name": "glusterFsVmsCopy",
+                "count": "[parameters('nbGlusterFsVms')]"
+            },
+            "dependsOn": [
+                "glusterFsNicsCopy",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagsStorageAccountName'))]"
+            ]
+       },
+        {
+            "comments": "witness NICs",
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('witnessNic', copyIndex())]",
+            "apiVersion": "2015-01-01",
+            "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                    "uri": "[concat(variables('linkedTemplatesUrl'), 'nics_template.json')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('witnessSubnets')[copyIndex()]]"
+                    },
+                    "ipAdddressPrefix": {
+                        "value": "[variables('witnessIpAdddressPrefixes')[copyIndex()]]"
+                    },
+                    "vmPrefix": {
+                        "value": "witn"
+                    },
+                    "nb_vms": {
+                        "value": 1
+                    },
+                    "enableAcceleratedNetworking": {
+                        "value": "[parameters('acceleratedNetworkingOnOthers')]"
+                    }
+                }
+            },
+            "copy": {
+                "name": "witnessNicsCopy",
+                "count": "[length(variables('witnessSubnets'))]"
+            },
+            "dependsOn": ["vNetAndNsg"]            
+        },
+        {
+            "comments": "Witness VM",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "witn0",
+            "apiVersion": "2017-12-01",
+            "location": "[variables('location')]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_DS3_v2"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "RedHat",
+                        "offer": "RHEL",
+                        "sku": "7-RAW",
+                        "version": "7.5.2018042521"
+                    },
+                    "osDisk": {
+                        "osType": "Linux",
+                        "name": "[concat('witn0_osDisk')]",
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite",
+                        "managedDisk": {
+                        }
+                    },
+                    "dataDisks": []
+                },
+                "osProfile": {
+                    "computerName": "witn0",
+                    "adminUsername": "rhel",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "/home/rhel/.ssh/authorized_keys",
+                                    "keyData": "[concat(parameters('rhelPubKeyValue'), '\n')]"
+                                }
+                            ]
+                        }
+                    },
+                    "secrets": []
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', 'witn0_main')]",
+                            "properties": {
+                                "primary": true
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', 'witn0_gfsfe')]",
+                            "properties": {
+                                "primary": false
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', 'witn0_db2fe')]",
+                            "properties": {
+                                "primary": false
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', 'witn0_db2be')]",
+                            "properties": {
+                                "primary": false
+                            }
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true,
+                        "storageUri": "[concat('https://',variables('diagsStorageAccountName'),'.blob.core.windows.net')]"
+                    }
+                }
+            },
+            "resources": [
+                {
+                    "apiVersion": "2017-12-01",
+                    "type": "extensions",
+                    "name": "initWitnessVm",
+                    "location": "[resourceGroup().location]",
+                    "dependsOn": [
+                        "[concat('Microsoft.Compute/virtualMachines/', 'witn0')]"
+                    ],
+                    "tags": {
+                        "displayName": "initWitnessVm"
+                    },
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Extensions",
+                        "type": "CustomScript",
+                        "typeHandlerVersion": "2.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[concat(variables('initScriptsUrl'), 'witness.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/startnetwork_root.sh')]",
+                                "[concat(variables('initScriptsUrl'), 'helperscripts/setsshkeys_root.sh')]"
+                            ]
+                        },
+                        "protectedSettings": {
+                            "commandToExecute": "[variables('commandOnWitness')]"
+                        }
+                    }
+                }
+            ],
+            "dependsOn": [
+                "witnessNicsCopy",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagsStorageAccountName'))]"
+            ]
+        },
+        {
+            "comments": "Windows Client NICs",
+            "type": "Microsoft.Resources/deployments",
+            "name": "[concat('windowsClientNic', copyIndex())]",
+            "apiVersion": "2015-01-01",
+            "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                    "uri": "[concat(variables('linkedTemplatesUrl'), 'nics_template.json')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('windowsClientSubnets')[copyIndex()]]"
+                    },
+                    "ipAdddressPrefix": {
+                        "value": "[variables('windowsClientIpAdddressPrefixes')[copyIndex()]]"
+                    },
+                    "vmPrefix": {
+                        "value": "wcli"
+                    },
+                    "nb_vms": {
+                        "value": 1
+                    },
+                    "enableAcceleratedNetworking": {
+                        "value": "[parameters('acceleratedNetworkingOnOthers')]"
+
+                    }
+                }
+            },
+            "copy": {
+                "name": "windowsClientNicsCopy",
+                "count": "[length(variables('windowsClientSubnets'))]"
+            },
+            "dependsOn": ["vNetAndNsg"]            
+        },
+        {
+            "comments": "Windows Client VM",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "wcli",
+            "apiVersion": "2017-12-01",
+            "location": "[variables('location')]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_DS3_v2"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "MicrosoftWindowsServer",
+                        "offer": "WindowsServer",
+                        "sku": "2016-Datacenter",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                        "osType": "Windows",
+                        "name": "[concat('wcli0_osDisk')]",
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite",
+                        "managedDisk": {
+                        }
+                    },
+                    "dataDisks": []
+                },
+                "osProfile": {
+                    "computerName": "wcli0",
+                    "adminUsername": "adwin",
+                    "adminPassword": "[parameters('adwinPassword')]",
+                    "windowsConfiguration": {
+                        "provisionVMAgent": true,
+                        "enableAutomaticUpdates": true
+                    },
+                    "secrets": []
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', 'wcli0_main')]",
+                            "properties": {
+                                "primary": true
+                            }
+                        },
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', 'wcli0_db2fe')]",
+                            "properties": {
+                                "primary": false
+                            }
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true,
+                        "storageUri": "[concat('https://',variables('diagsStorageAccountName'),'.blob.core.windows.net')]"
+                    }
+                }
+            },
+            "dependsOn": [
+                "windowsClientNicsCopy",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('diagsStorageAccountName'))]"
+            ]
+        }
+    ]
+}

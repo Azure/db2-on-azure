@@ -1,0 +1,42 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "userPubKeyValue": {
+            "value": null
+        },
+        "rhelPrivKeyValue": {
+            "value": null
+        },
+        "rhelPubKeyValue": {
+            "value": null
+        },
+        "rootPrivKeyValue": {
+            "value": null
+        },
+        "rootPubKeyValue": {
+            "value": null
+        },
+        "adwinPassword": {
+            "value": null
+        },
+        "db2bits": {
+            "value": null
+        },
+        "gitrawurl": {
+            "value": null
+        },
+        "nbDb2MemberVms": {
+            "value": 2
+        },
+        "nbDb2CfVms": {
+            "value": 2
+        },
+        "nbGlusterFsVms": {
+            "value": 3
+        },
+        "jumpboxPublicName": {
+            "value": null
+        }
+    }
+}
