@@ -21,5 +21,5 @@ db2 connect reset
 db2 restart database test1
 ```
 
-resources:
+Resources:
 - [Resolving "The transaction log for the database is full" error](http://www-01.ibm.com/support/docview.wss?uid=swg21472442)
