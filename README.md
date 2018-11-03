@@ -1,14 +1,39 @@
+# db2onAzure
 
-# Contributing
+DB2 pureScale setup on Azure
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.microsoft.com.
+## Resources
 
-When you submit a pull request, a CLA-bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., label, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
+- <https://www.ibm.com/analytics/us/en/db2/trials/>
+- [Installing a Db2 pureScale environment (Linux)](https://www.ibm.com/support/knowledgecenter/en/SSEPGG_11.1.0/com.ibm.db2.luw.qb.server.doc/doc/t0061541.html)
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+## main files and folders
+
+- The [documentation](doc/README.md) provides a step by step procedure to use the ARM templates and scripts. 
+- `deployment/deploy.sh` is the main script to deploy everything
+- `deployment/otherScripts/` folder contains that may be useful for some tasks 
+- The [tests](tests/README.md) folder contains test samples (with SQL statements for now).
+
+## Topology
+
+The ARM templates deploy the following:
+
+Subnet name | IP address space | Comments
+------------|------------------|-----------------------------------------------------------------
+main        | 192.168.0.0/24   | Management. All primary NIcs should be on this subnet.
+gfsfe       | 192.168.1.0/24   | Gluster FS Front end. This is where iSCSI connections happen.
+gfsbe       | 192.168.2.0/24   | Gluster FS Back End (Gluster internal cluster network)
+db2be       | 192.168.3.0/24   | DB2 pureScale Back End (DB2 internal cluster network)
+db2fe       | 192.168.4.0/24   | DB2 pureScale Front End
+
+The Vms have the following name prefixes and IP addresses
+
+VM type | VM name | IP Address
+--------|----------------|--------------------
+Jumpbox | jumpbox | 192.168.0.5
+Gluster FS | g{vm_number} | 192.168.{subnet}.1{vm_number}
+DB2 member | d{vm_number} | 192.168.{subnet}.2{vm_number}
+DB2 CF | cf{vm_number} | 192.168.{subnet}.3{vm_number}
+Windows Client | wcli0 | 192.168.{subnet}.4{vm_number}
+Witness | witn0 | 192.168.{subnet}.6{vm_number}
+
